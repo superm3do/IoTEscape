@@ -38,18 +38,13 @@ void setup() {
   Serial.println("\n=================================");
   Serial.println("Starting BitBase HUB (Tier 3)...");
   Serial.println("=================================");
+  
+
 
   // --- WIFIMANAGER SETUP ---
   WiFiManager wifiManager;
   
-  // Opcijsko: Nastavi timeout (npr. 3 minute), če ni interakcije
-  // wifiManager.setConfigPortalTimeout(180);
-
   Serial.println("[WIFI] Preverjam znana omrezja ali odpiram AP 'BitBase-Setup'...");
-  
-  // autoConnect poskusi obstoječa omrežja. Če pade, ustvari AP z imenom "BitBase-Setup".
-  // Če želiš, da ima ta AP geslo (da učenci ne vdrejo prej kot učitelj), uporabi:
-  // wifiManager.autoConnect("BitBase-Setup", "Admin1234");
   
   if (!wifiManager.autoConnect("BitBase-Setup")) {
     Serial.println("[WIFI] Napaka: Povezava ni uspela. Resetiram napravo...");
@@ -66,6 +61,30 @@ void setup() {
   neopixelWrite(RGB_BUILTIN, 0, 255, 0);
   delay(2000);
   neopixelWrite(RGB_BUILTIN, 0, 0, 0);
+
+  // --- NTP TIME SETUP (Slovenski čas) ---
+  // PRESTAVLJENO NOTER V SETUP FUNKCIJO!
+  Serial.println("[NTP] Sinhroniziram tocen cas...");
+  // 3600 = +1 ura (CET), 3600 = +1 ura (poletni čas CEST)
+  configTime(3600, 3600, "pool.ntp.org", "time.nist.gov");
+
+  struct tm timeinfo;
+  if (getLocalTime(&timeinfo)) {
+    Serial.println("[NTP] Cas uspesno nastavljen!");
+  } else {
+    Serial.println("[NTP] Napaka pri pridobivanju casa.");
+  }
+} // <--- TUKAJ SE KONČA SETUP FUNKCIJA
+
+String getLocalISO8601Time() {
+  struct tm timeinfo;
+  if (!getLocalTime(&timeinfo)) {
+    return ""; // Če nima časa, vrne prazno (Supabase bo uporabil svoj default)
+  }
+  char timeStringBuff[50];
+  // Formatiramo cas z oznako +02:00 (Slovenija poleti) oz +01:00 pozimi.
+  strftime(timeStringBuff, sizeof(timeStringBuff), "%Y-%m-%dT%H:%M:%S+02:00", &timeinfo);
+  return String(timeStringBuff);
 }
 
 void loop() {
@@ -133,7 +152,26 @@ void loop() {
                 http.addHeader("Content-Type", "application/json");
                 http.addHeader("Prefer", "return=minimal");
 
-                String jsonPayload = "{\"hub_id\":\"ESP32_01\", \"secure_token\":\"" + token + "\", \"student_number\":1, \"temperature\":" + temperature + ", \"light\":" + lightLevel + "}";      
+                // 1. Pridobimo osnovni MAC naslov
+                String deviceMac = WiFi.macAddress();
+                deviceMac.toUpperCase(); 
+
+                // 2. Ustvarimo čisti PIN (vzamemo zadnje 4 znake brez dvopičij)
+                String cleanMac = deviceMac;
+                cleanMac.replace(":", ""); // Odstranimo dvopičja (AC:A7 -> ACA7)
+                String devicePin = cleanMac.substring(cleanMac.length() - 4); // Vzamemo zadnje 4 znake
+
+                // 3. Sestavimo paket s pravim PIN-om
+                String jsonPayload = "{";
+                jsonPayload += "\"hub_id\":\"" + deviceMac + "\",";
+                jsonPayload += "\"status\":\"PAIRING\",";  
+                jsonPayload += "\"pin\":\"" + devicePin + "\","; // Avtomatski PIN!
+                jsonPayload += "\"student_number\":1,";
+                jsonPayload += "\"temperature\":" + String(temperature) + ",";
+                jsonPayload += "\"light\":" + String(lightLevel);
+                jsonPayload += "}";
+
+
                 int httpResponseCode = http.POST(jsonPayload);
 
                 if (httpResponseCode == 201) {
@@ -181,7 +219,11 @@ void loop() {
             http.addHeader("Authorization", String("Bearer ") + supabase_key);
             http.addHeader("Content-Type", "application/json");
 
-            String jsonPayload = "{\"hub_id\":\"ESP32_01\", \"student_number\":\"" + studentID + "\", \"message\":\"" + payloadValue + "\"}";
+            // POPRAVEK: Odstranjena dvojna definicija jsonPayload
+            String timestamp = getLocalISO8601Time();
+            String timeField = (timestamp != "") ? "\"created_at\":\"" + timestamp + "\", " : "";
+
+            String jsonPayload = "{" + timeField + "\"hub_id\":\"ESP32_01\", \"student_number\":\"" + studentID + "\", \"message\":\"" + payloadValue + "\"}";
             
             int httpResponseCode = http.POST(jsonPayload);
             if (httpResponseCode == 201) {
